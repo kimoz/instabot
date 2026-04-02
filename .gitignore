@@ -1,0 +1,7 @@
+.env
+ig_session.json
+bot.log
+posted_history.json
+temp_*.png
+carousel_*.jpg
+__pycache__/
