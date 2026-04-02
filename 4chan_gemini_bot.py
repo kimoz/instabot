@@ -609,7 +609,7 @@ def upload_album(username, password, image_paths, caption=""):
 # ==========================================
 # 7. 메인 작업 함수
 # ==========================================
-def run_bot_job():
+def run_bot_job(test_mode=False):
     logger.info("=" * 50)
     logger.info("리얼 캡처 봇 출동!")
     logger.info("=" * 50)
@@ -639,10 +639,11 @@ def run_bot_job():
 
     caption = generate_instagram_caption(op_title, op_comments)
     
-    # [Human-like Delay] 업로드 직전 랜덤 대기
-    delay = random.randint(*UPLOAD_DELAY_RANGE)
-    logger.info(f"자동화 감지 방지를 위해 {delay}초 대기 후 업로드를 시작합니다...")
-    time.sleep(delay)
+    # [Human-like Delay] 업로드 직전 랜덤 대기 (테스트 모드에서는 생략)
+    if not test_mode:
+        delay = random.randint(*UPLOAD_DELAY_RANGE)
+        logger.info(f"자동화 감지 방지를 위해 {delay}초 대기 후 업로드를 시작합니다...")
+        time.sleep(delay)
     
     success = upload_album(IG_USERNAME, IG_PASSWORD, image_paths, caption=caption)
     
@@ -698,19 +699,25 @@ if __name__ == "__main__":
     logger.info("=" * 60)
     logger.info("[네이트판/더쿠 -> 썸네일 & 본문/댓글 리얼 캡처 -> 인스타 업로드]")
     logger.info("=" * 60)
-    
+
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        logger.info("[TEST] 테스트 모드: 스케줄러 없이 즉시 1회 실행합니다.")
+        run_bot_job(test_mode=True)
+        logger.info("[TEST] 테스트 완료.")
+        sys.exit(0)
+
     # 1. 즉시 1회 실행 (운영 시작 확인용)
     logger.info("[START] 봇 가동을 시작하며 즉시 1회 업로드를 시도합니다.")
     run_bot_job()
-    
+
     # 2. 피크 시간대 스케줄링 설정
     setup_peak_schedules()
-    
+
     # 3. 매일 자정에 스케줄 갱신 (여기서 1회만 등록 — 무한 누적 방지)
     schedule.every().day.at("00:01").do(setup_peak_schedules).tag('system')
-    
+
     logger.info("피크 시간대 스마트 스케줄러 가동 중.. zZZ")
-    
+
     while True:
         schedule.run_pending()
         time.sleep(30)
