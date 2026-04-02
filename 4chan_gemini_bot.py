@@ -18,6 +18,7 @@ import re
 from datetime import datetime, timedelta
 from PIL import Image, ImageDraw, ImageFont
 from instagrapi import Client
+from instagrapi.exceptions import ChallengeRequired, LoginRequired
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
@@ -591,28 +592,35 @@ def create_carousel_images_hybrid(op_title, body_img_path, cmt_img_path):
 def upload_album(username, password, image_paths, caption=""):
     logger.info(f"[{username}] 인스타 세션 로딩 및 로그인 시도 중...")
     cl = Client()
+    session_file = os.path.join(SCRIPT_DIR, "ig_session.json")
     try:
-        session_file = os.path.join(SCRIPT_DIR, "ig_session.json")
         if os.path.exists(session_file):
             cl.load_settings(session_file)
         try:
             cl.login(username, password)
-        except Exception as login_err:
-            err_str = str(login_err)
-            if "challenge" in err_str.lower() or "ChallengeRequired" in err_str:
-                logger.warning("Instagram 보안 인증 요청됨. 이메일/SMS로 전송된 코드를 입력하세요.")
-                code = input("인증 코드 입력: ").strip()
-                cl.challenge_resolve(cl.last_json)
-                cl.challenge_send_security_code(code)
-            else:
-                raise
+        except ChallengeRequired:
+            logger.warning("Instagram 보안 인증 요청됨. 이메일/SMS로 전송된 코드를 입력하세요.")
+            cl.challenge_resolve(cl.last_json)
+            code = input("인증 코드 입력: ").strip()
+            cl.challenge_send_security_code(code)
+            logger.info("인증 완료. 업로드를 계속합니다.")
+        except LoginRequired:
+            logger.warning("세션 만료. 세션 파일 삭제 후 재로그인합니다.")
+            if os.path.exists(session_file):
+                os.remove(session_file)
+            cl2 = Client()
+            cl2.login(username, password)
+            cl2.dump_settings(session_file)
+            result = cl2.album_upload(image_paths, caption=caption)
+            logger.info(f"다중 카드뉴스 자동 업로드 완료! URL: https://www.instagram.com/p/{result.code}/")
+            return True
         cl.dump_settings(session_file)
 
         result = cl.album_upload(image_paths, caption=caption)
         logger.info(f"다중 카드뉴스 자동 업로드 완료! URL: https://www.instagram.com/p/{result.code}/")
         return True
     except Exception as e:
-        logger.error(f"인스타그램 업로드 에러: {e}")
+        logger.error(f"인스타그램 업로드 에러: {type(e).__name__}: {e}")
         return False
 
 
