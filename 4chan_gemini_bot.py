@@ -595,9 +595,19 @@ def upload_album(username, password, image_paths, caption=""):
         session_file = os.path.join(SCRIPT_DIR, "ig_session.json")
         if os.path.exists(session_file):
             cl.load_settings(session_file)
-        cl.login(username, password)
+        try:
+            cl.login(username, password)
+        except Exception as login_err:
+            err_str = str(login_err)
+            if "challenge" in err_str.lower() or "ChallengeRequired" in err_str:
+                logger.warning("Instagram 보안 인증 요청됨. 이메일/SMS로 전송된 코드를 입력하세요.")
+                code = input("인증 코드 입력: ").strip()
+                cl.challenge_resolve(cl.last_json)
+                cl.challenge_send_security_code(code)
+            else:
+                raise
         cl.dump_settings(session_file)
-        
+
         result = cl.album_upload(image_paths, caption=caption)
         logger.info(f"다중 카드뉴스 자동 업로드 완료! URL: https://www.instagram.com/p/{result.code}/")
         return True
