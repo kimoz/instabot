@@ -342,6 +342,11 @@ def get_trending_post():
 
             content_el = soup_candidate.select_one(config['content_selector'])
             if content_el:
+                body_text = content_el.get_text()
+                if len(body_text) < 50:
+                    logger.info(f"본문이 너무 짧아 제외합니다 ({len(body_text)}자): '{candidate['title']}'")
+                    continue
+
                 body_links = [a['href'] for a in content_el.find_all('a', href=True)
                               if a['href'].startswith('http')]
                 if body_links:
