@@ -753,10 +753,6 @@ if __name__ == "__main__":
         logger.info("[TEST] 테스트 완료.")
         sys.exit(0)
 
-    # 1. 즉시 1회 실행 (운영 시작 확인용)
-    logger.info("[START] 봇 가동을 시작하며 즉시 1회 업로드를 시도합니다.")
-    run_bot_job()
-
     # 2. 피크 시간대 스케줄링 설정
     setup_peak_schedules()
 
