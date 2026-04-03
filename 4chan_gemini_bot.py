@@ -328,17 +328,42 @@ def get_trending_post():
         return None, None, []
 
     config = SITE_CONFIGS[selected_domain]
-    target_post = random.choice(all_valid_posts)
+    random.shuffle(all_valid_posts)
+
+    # 본문 링크 필터링: 외부 링크 없는 게시물 선택
+    target_post = None
+    p_soup = None
+    for candidate in all_valid_posts:
+        try:
+            time.sleep(random.uniform(1.0, 2.0))
+            p_res = http_session.get(candidate['link'], headers=config['headers'], timeout=15)
+            p_res.raise_for_status()
+            soup_candidate = BeautifulSoup(p_res.text, 'html.parser')
+
+            content_el = soup_candidate.select_one(config['content_selector'])
+            if content_el:
+                body_links = [a['href'] for a in content_el.find_all('a', href=True)
+                              if a['href'].startswith('http')]
+                if body_links:
+                    logger.info(f"본문에 외부 링크 감지, 제외합니다: '{candidate['title']}'")
+                    continue
+
+            target_post = candidate
+            p_soup = soup_candidate
+            break
+        except Exception as e:
+            logger.warning(f"본문 링크 확인 중 에러(무시 가능): {e}")
+            continue
+
+    if not target_post:
+        logger.warning("링크 없는 게시물을 찾지 못했습니다.")
+        return None, None, []
+
     logger.info(f"타겟 게시물 선정 ({target_post['source']}): '{target_post['title']}'")
 
     # 상세 페이지에서 댓글 텍스트 수집 (AI용)
     comments = []
     try:
-        time.sleep(random.uniform(1.0, 2.0))
-        p_res = http_session.get(target_post['link'], headers=config['headers'], timeout=15)
-        p_res.raise_for_status()
-        p_soup = BeautifulSoup(p_res.text, 'html.parser')
-
         for sel in config['comment_selectors']:
             cmt_elements = p_soup.select(sel)
             for cmt in cmt_elements:
@@ -349,7 +374,6 @@ def get_trending_post():
                     break
             if len(comments) >= MIN_COMMENTS_THRESHOLD:
                 break
-
     except Exception as e:
         logger.warning(f"댓글 텍스트 수집 중 에러(무시 가능): {e}")
 
