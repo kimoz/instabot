@@ -287,11 +287,30 @@ def _collect_posts_from_site(site_domain, posted_set):
                 title = item.get_text(strip=True)
                 if len(title) < MIN_TITLE_LENGTH:
                     continue
-
-                # 광고성 키워드 필터링
-                if any(kw in title for kw in AD_KEYWORDS):
-                    logger.info(f"[{config['name']}] 광고성 글로 의심되어 제외합니다: '{title}'")
-                    continue
+                # [수정] 본문 내용 스캔하여 외부 광고성 링크 체크
+                try:
+                    site_domain = config.get('domain', site_domain) # 도메인 보정
+                    post_res = http_session.get(full_link, headers=config['headers'], timeout=15)
+                    post_soup = BeautifulSoup(post_res.text, 'html.parser')
+                    body_elem = post_soup.select_one(config['content_selector'])
+                    
+                    if body_elem:
+                        links = body_elem.find_all('a', href=True)
+                        has_ad_link = False
+                        for a in links:
+                            link_url = a['href'].lower()
+                            # 자기 사이트(네이트/더쿠) 도메인이 아닌 외부 http 링크가 있으면 차단
+                            if link_url.startswith('http') and site_domain not in link_url:
+                                has_ad_link = True
+                                break
+                                
+                        if has_ad_link:
+                            logger.info(f"[{config['name']}] 본문 내 외부 링크(광고 의심) 감지되어 제외: '{title}'")
+                            continue
+                            
+                except Exception as e:
+                    logger.warning(f"본문 링크 체크 중 에러(무시하고 진행): {e}")
+                    pass
 
                 valid_posts.append({"title": title, "link": full_link, "source": source['name']})
         except Exception as e:
