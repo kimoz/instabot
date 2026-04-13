@@ -24,9 +24,11 @@ from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
 
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
 except ImportError:
     genai = None
+    types = None
 
 # ==========================================
 # 로깅 설정
@@ -49,7 +51,8 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 IG_USERNAME = os.getenv("IG_USERNAME", "")
 IG_PASSWORD = os.getenv("IG_PASSWORD", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "")
+GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 # ==========================================
 # 상수 정의
@@ -66,11 +69,12 @@ UPLOAD_DELAY_RANGE = (60, 300)   # 업로드 전 대기 범위 (초)
 CAROUSEL_TARGET_SIZE = (1080, 1080)
 MAX_CAROUSEL_IMAGES = 10
 
-# 광고/홍보성 및 특정 주제 제외 키워드 (이 단어들이 포함된 제목은 수집하지 않음)
+# 광고/홍보성 및 특정 주제 제외 키워드 (이 단어들이 포함된 제목/본문은 수집하지 않음)
 AD_KEYWORDS = [
     "광고", "홍보", "추천인", "수익", "부업", "공구", "판매", "구매", "협찬", 
     "체험단", "서포터즈", "가입", "이벤트", "적립", "쿠폰", "할인코드", "코드입력",
-    "방탄", "BTS", "방탄소년단", "남초", "여초", "여초반응", "남초반응"
+    "방탄", "BTS", "방탄소년단", "남초", "여초", "여초반응", "남초반응",
+    "유튜브"
 ]
 
 # 폰트 경로 (봇 폴더 내 번들링된 폰트 우선 사용)
@@ -78,10 +82,19 @@ FONT_BOLD = os.path.join(SCRIPT_DIR, "malgunbd.ttf")
 FONT_REGULAR = os.path.join(SCRIPT_DIR, "malgun.ttf")
 POSTED_HISTORY_FILE = os.path.join(SCRIPT_DIR, "posted_history.json")
 
-# Gemini API 초기화 (모듈 로드 시 1회만 설정)
-if genai and GEMINI_API_KEY and "YOUR_" not in GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    logger.info("Gemini API 초기화 완료")
+# Google GenAI 초기화 (PlanMaster와 완전히 동일한 @google/genai 방식)
+client = None
+if genai and GOOGLE_CLOUD_PROJECT:
+    try:
+        client = genai.Client(
+            vertexai=True,
+            project=GOOGLE_CLOUD_PROJECT,
+            location=GOOGLE_CLOUD_LOCATION
+        )
+        logger.info(f"Vertex AI(google-genai) 초기화 완료 (Project: {GOOGLE_CLOUD_PROJECT})")
+    except Exception as e:
+        logger.error(f"Vertex AI 초기화 실패: {e}")
+        client = None
 
 # 네트워크 세션 (자동 재시도 포함)
 http_session = requests.Session()
@@ -170,11 +183,12 @@ def generate_instagram_caption(title, comments):
     # [2. DYNAMIC FALLBACK]
     fallback_tags = "#1dayhumor #오늘의톡 #꿀잼 #이슈"
     
-    if not genai or not GEMINI_API_KEY or "YOUR_" in GEMINI_API_KEY:
+    if not client:
         return caption_top + "오늘도 즐거운 하루 되세요! 😊\n\n" + fallback_tags
         
     try:
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        # PlanMaster와 동일한 모델 명칭 사용
+        model_id = "gemini-2.5-flash"
         
         comments_str = "\n".join([f"- {c}" for c in comments[:5]])
         
@@ -193,10 +207,26 @@ def generate_instagram_caption(title, comments):
         - 점(.)을 길게 나열하는 구식 방식은 금지.
         """
 
-        response = model.generate_content(prompt)
+        # 안전 설정 (PlanMaster 스타일)
+        safety_settings = [
+            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_ONLY_HIGH'),
+            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_ONLY_HIGH'),
+            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_ONLY_HIGH'),
+            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_ONLY_HIGH'),
+        ]
+
+        response = client.models.generate_content(
+            model=model_id,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                max_output_tokens=1024,
+                temperature=0.7,
+                safety_settings=safety_settings
+            )
+        )
         ai_caption = response.text.strip()
         
-        # 해시태그 개수 강제 제한 (혹시 많이 나왔을 경우 대비)
+        # 해시태그 개수 강제 제한
         lines = ai_caption.split('\n')
         final_lines = []
         tags_found = []
@@ -206,7 +236,8 @@ def generate_instagram_caption(title, comments):
                     if word.startswith("#") and len(tags_found) < 5:
                         tags_found.append(word)
             else:
-                final_lines.append(line)
+                if line.strip():
+                    final_lines.append(line)
         
         tag_str = " ".join(tags_found) if tags_found else fallback_tags
         final_caption = f"{caption_top}" + "\n".join(final_lines).strip() + f"\n\n.\n{tag_str}"
@@ -214,7 +245,7 @@ def generate_instagram_caption(title, comments):
         logger.info(f"최종 캡션 준비 완료 (태그 {len(tags_found)}개 사용)")
         return final_caption
     except Exception as e:
-        logger.error(f"Gemini 캡션 생성 에러: {e}")
+        logger.error(f"Vertex AI 캡션 생성 에러: {e}")
         return caption_top + "오늘의 핫이슈! 함께 봐요 😊\n\n" + fallback_tags
 
 
@@ -287,20 +318,52 @@ def _collect_posts_from_site(site_domain, posted_set):
                 title = item.get_text(strip=True)
                 if len(title) < MIN_TITLE_LENGTH:
                     continue
-                # [수정] 본문 내용 스캔하여 외부 광고성 링크 체크
+
+                # [추가] 제목 키워드 필터링 (AD_KEYWORDS)
+                has_blocked_kw = False
+                for kw in AD_KEYWORDS:
+                    if kw in title:
+                        logger.info(f"[{config['name']}] 제목 내 차단 키워드({kw}) 감지되어 제외: '{title}'")
+                        has_blocked_kw = True
+                        break
+                if has_blocked_kw:
+                    continue
+
+                # [수정] 본문 내용 스캔하여 외부 광고성 링크 및 키워드 체크
                 try:
-                    site_domain = config.get('domain', site_domain) # 도메인 보정
+                    site_domain_check = config.get('domain', site_domain) # 도메인 보정
                     post_res = http_session.get(full_link, headers=config['headers'], timeout=15)
                     post_soup = BeautifulSoup(post_res.text, 'html.parser')
                     body_elem = post_soup.select_one(config['content_selector'])
                     
                     if body_elem:
+                        body_text = body_elem.get_text()
+                        
+                        # 1. 본문 키워드 필터링
+                        has_body_kw = False
+                        for kw in AD_KEYWORDS:
+                            if kw in body_text:
+                                logger.info(f"[{config['name']}] 본문 내 차단 키워드({kw}) 감지되어 제외: '{title}'")
+                                has_body_kw = True
+                                break
+                        if has_body_kw:
+                            continue
+
+                        # 2. 정규표현식을 이용한 강력한 URL 탐지 (하이퍼링크 + 일반 텍스트)
+                        # http://, https://, www. 로 시작하는 모든 주소 탐지
+                        url_pattern = re.compile(r'(?:https?://|www\.)[^\s<>\"\'\]\)]+')
+                        found_urls = url_pattern.findall(body_text)
+                        
+                        # <a> 태그의 href도 함께 체크
                         links = body_elem.find_all('a', href=True)
-                        has_ad_link = False
                         for a in links:
-                            link_url = a['href'].lower()
-                            # 자기 사이트(네이트/더쿠) 도메인이 아닌 외부 http 링크가 있으면 차단
-                            if link_url.startswith('http') and site_domain not in link_url:
+                            found_urls.append(a['href'])
+                        
+                        has_ad_link = False
+                        for link_url in found_urls:
+                            link_url = link_url.lower()
+                            # 자기 사이트(네이트/더쿠) 도메인이 아닌 외부 링크가 있으면 차단
+                            if (link_url.startswith('http') or link_url.startswith('www.')) and site_domain_check not in link_url:
                                 has_ad_link = True
                                 break
                                 
@@ -361,14 +424,23 @@ def get_trending_post():
 
             content_el = soup_candidate.select_one(config['content_selector'])
             if content_el:
-                body_text = content_el.get_text()
-                if len(body_text) < 50:
-                    logger.info(f"본문이 너무 짧아 제외합니다 ({len(body_text)}자): '{candidate['title']}'")
-                    continue
+                # [수정] 정규표현식 기반의 강력한 링크 필터링 도입
+                body_text_full = content_el.get_text()
+                url_pattern = re.compile(r'(?:https?://|www\.)[^\s<>\"\'\]\)]+')
+                body_urls = url_pattern.findall(body_text_full)
+                
+                # <a> 태그 href 추가 수집
+                body_urls += [a['href'] for a in content_el.find_all('a', href=True)]
+                
+                has_external_link = False
+                site_domain_check = config.get('domain', selected_domain)
+                for u in body_urls:
+                    u_low = u.lower()
+                    if (u_low.startswith('http') or u_low.startswith('www.')) and site_domain_check not in u_low:
+                        has_external_link = True
+                        break
 
-                body_links = [a['href'] for a in content_el.find_all('a', href=True)
-                              if a['href'].startswith('http')]
-                if body_links:
+                if has_external_link:
                     logger.info(f"본문에 외부 링크 감지, 제외합니다: '{candidate['title']}'")
                     continue
 

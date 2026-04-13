@@ -5,3 +5,8 @@ posted_history.json
 temp_*.png
 carousel_*.jpg
 __pycache__/
+*.json
+!posted_history.json
+!ig_session.json
+scratch/
+vertex_ai_key.json
